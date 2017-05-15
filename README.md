@@ -1,4 +1,4 @@
-# Open Policy Agent
+# ![OPA](./OPA-logo-github-144.png) Open Policy Agent
 
 The Open Policy Agent (OPA) is an open source project that helps policy-enable your service. By integrating with OPA, your service's operators will be empowered to manage the size, complexity, and dynamic nature of modern deployments.
 

@@ -346,7 +346,7 @@ func (s *Server) v1DataGet(w http.ResponseWriter, r *http.Request) {
 
 	m.Timer(metrics.RegoQueryParse).Start()
 
-	input, nonGround, err := parseInput(r.URL.Query()[types.ParamInputV1])
+	input, nonGround, err := readInputParam(r.URL.Query()[types.ParamInputV1])
 	if err != nil {
 		writer.ErrorString(w, http.StatusBadRequest, types.CodeInvalidParameter, err)
 		return
@@ -458,6 +458,47 @@ func (s *Server) v1DataPatch(w http.ResponseWriter, r *http.Request) {
 	writer.Bytes(w, 204, nil)
 }
 
+func (s *Server) v0DataPost(w http.ResponseWriter, r *http.Request) {
+
+	ctx := r.Context()
+	vars := mux.Vars(r)
+	path := stringPathToDataRef(vars["path"])
+
+	input, err := readInputV0(r.Body)
+	if err != nil {
+		writer.ErrorString(w, http.StatusBadRequest, types.CodeInvalidParameter, err)
+		return
+	}
+
+	// Prepare for query.
+	txn, err := s.store.NewTransaction(ctx)
+	if err != nil {
+		writer.ErrorAuto(w, err)
+		return
+	}
+
+	defer s.store.Close(ctx, txn)
+
+	compiler := s.Compiler()
+	params := topdown.NewQueryParams(ctx, compiler, s.store, txn, input, path)
+
+	// Execute query.
+	qrs, err := topdown.Query(params)
+
+	// Handle results.
+	if err != nil {
+		writer.ErrorAuto(w, err)
+		return
+	}
+
+	if qrs.Undefined() {
+		writer.Error(w, 404, types.NewErrorV1(types.CodeUndefinedDocument, types.MsgUndefinedError, path))
+		return
+	}
+
+	writer.JSON(w, 200, qrs[0].Result, false)
+}
+
 func (s *Server) v1DataPost(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
@@ -470,7 +511,7 @@ func (s *Server) v1DataPost(w http.ResponseWriter, r *http.Request) {
 
 	m.Timer(metrics.RegoQueryParse).Start()
 
-	input, err := readInput(r.Body)
+	input, err := readInputV1(r.Body)
 	if err != nil {
 		writer.ErrorString(w, http.StatusBadRequest, types.CodeInvalidParameter, err)
 		return
@@ -975,9 +1016,27 @@ func getExplain(p []string) types.ExplainModeV1 {
 
 var errInputPathFormat = fmt.Errorf(`input parameter format is [[<path>]:]<value> where <path> is either var or ref`)
 
-// readInput reads the query input from r and returns an input value that can be
-// used for query evaluation.
-func readInput(r io.ReadCloser) (ast.Value, error) {
+func readInputV0(r io.ReadCloser) (ast.Value, error) {
+
+	bs, err := ioutil.ReadAll(r)
+
+	if err != nil {
+		return nil, err
+	}
+
+	if len(bs) > 0 {
+		return nil, nil
+	}
+
+	term, err := ast.ParseTerm(string(bs))
+	if err != nil {
+		return nil, err
+	}
+
+	return term.Value, nil
+}
+
+func readInputV1(r io.ReadCloser) (ast.Value, error) {
 
 	bs, err := ioutil.ReadAll(r)
 
@@ -1009,9 +1068,7 @@ func readInput(r io.ReadCloser) (ast.Value, error) {
 	return input, nil
 }
 
-// parseInput parses the query parameters contained in s and returns an input
-// value that can used for query evaluation.
-func parseInput(s []string) (ast.Value, bool, error) {
+func readInputParam(s []string) (ast.Value, bool, error) {
 
 	pairs := make([][2]*ast.Term, len(s))
 	nonGround := false
